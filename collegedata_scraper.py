@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 from requests import get
 from bs4 import BeautifulSoup, SoupStrainer
+from IPython.display import clear_output
 import re
 
 
@@ -21,7 +22,7 @@ EMPTY_H1 = "Retrieve a Saved Search"
 # At larger `school_id` values, especially over 1000, no-school pages are
 # returned more often. I'm fairly confident there are none over 5000.
 SCHOOL_ID_START = 1
-SCHOOL_ID_END = 10
+SCHOOL_ID_END = 5000
 SCHOOL_IDS = range(SCHOOL_ID_START, SCHOOL_ID_END + 1)
 # CollegeData.com has no problem with requests without headers, but we can
 # send a fake header anyway:
@@ -63,12 +64,6 @@ def get_collegedata_page(school_id, page_id):
 
     soup = get_soup(url, strainer)
     print(f'Getting {url}')
-    
-    if not soup.h1:
-        raise BadSoupError
-    
-    if soup.h1.string == EMPTY_H1:
-        raise NoSchoolError
         
     return soup
 
@@ -137,7 +132,30 @@ def relabel(page):
     regex = re.compile('Population')
     th_tag = page.find('th', string = regex)
     if th_tag:
-        th.string = "City Population"
+        th_tag.string = "City Population"
+        
+    # Rename the duplicate Entrance Difficulty label on the Overview page.
+    div = page.find('div', id = 'section0')
+    if div:
+        th_tag = div.find('th', string = 'Entrance Difficulty')
+        th_tag.string = 'Entrance Difficulty, Category'
+        
+    # Prepend labels to 'Other Application Requirements' table.
+    caption = 'Other Application Requirements'
+    caption_tag = page.find('caption', string = caption)
+    if caption_tag:
+        th_tags = caption_tag.parent.find_all('th')
+        for tag in th_tags:
+            text = tag.get_text(' ', strip = True)
+            tag.string = 'Application Requirement, ' + text
+        
+    # Prepend labels to 'Security' table.
+    div = page.find('div', id = 'section22')
+    if div:
+        th_tags = div.find_all('th')
+        for tag in th_tags:
+            text = tag.get_text(' ', strip = True)
+            tag.string = 'Security, ' + text
     
     # Delete the row containing the map widget.
     b_tag = page.find('b', string = 'View Larger Map')
@@ -157,36 +175,29 @@ def extract(page):
     page_s = pd.Series()
     
     # Convert all HTML tables in page to a list of pandas DataFrames.
-    df_list = pd.read_html(page.decode(), na_values = NA_VALS, index_col = 0)
+    if page.find('table'):
+        df_list = pd.read_html(page.decode(), na_values = NA_VALS, 
+            index_col = 0)
+    else:
+        df_list = []
 
     # Split all dfs into separate lists depending on dimension.
     nocol_df_list = []
     onecol_df_list = []
     table_df_list = []
     for df in df_list:
-        if len(df.columns) == 0:
-            nocol_df_list.append(df)
         if len(df.columns) == 1 and len(df) > 1:
             onecol_df_list.append(df)
         if len(df.columns) > 1:
             table_df_list.append(df)
-            
-    # DATAFRAMES w/NO COLUMNS
-    ##########################################################################
-    # Create a labeled Series from nocol_dfs and append it to school_s.
-    vals = [df.index.tolist()[0] for df in nocol_df_list]
-    idx = ['Entrance Difficulty, Description',
-           "Master's Degrees Offered",
-           "Doctoral Degrees Offered"]
-    s = pd.Series(vals, index = idx)
-    page_s = page_s.append(s)
 
     # DATAFRAMES w/ONE COLUMN
     ##########################################################################
     # Extract only column from each df in one_col_df_list as a Series.
     s_list = [df.iloc[:, 0] for df in onecol_df_list]
-    s = pd.concat(s_list)
-    page_s = page_s.append(s)
+    if s_list:
+        s = pd.concat(s_list)
+        page_s = page_s.append(s)
     
     # DATAFRAMES w/MULTIPLE COLUMNS
     ##########################################################################
@@ -197,10 +208,13 @@ def extract(page):
         # same structure. Create Series from cell vals each labeled by 
         # combining row + column label.
         if df.index.name in ['Subject', 'Exam']:
+            s = pd.Series()
             cols_s = [df[col] for col in df.columns]
             for col_s in cols_s:
-                col_s.index = col_s.index + ', ' + col_s.name
-            s = pd.concat(cols_s)
+                col_s = col_s[col_s.index.notna()] # drop null index rows
+                if col_s.name.find('Unnamed') == -1:
+                    col_s.index = col_s.index + ', ' + col_s.name
+                s = s.append(col_s)
             page_s = page_s.append(s)
             
         # CATEGORICAL TABLES
@@ -212,7 +226,10 @@ def extract(page):
             s = pd.Series()
             for row_name, row in df.iterrows():
                 label = 'Factor, ' + row_name
-                s[label] = row.dropna().index.tolist()[0]
+                vals = row.dropna().index.tolist()
+                if vals:
+                    val = vals[0]
+                    s[label] = val
             page_s = page_s.append(s)
 
         # 'Intercollegiate Sports Offered' exists on the 'Campus Life'
@@ -235,36 +252,46 @@ def extract(page):
     # ADDITIONAL EXTRACTIONS
     ##########################################################################
     # Get school Name and Description, which are not in a table.
-    if page_id == 1:
+    if page.h1 and page.h1.text != EMPTY_H1:
         page_s['Name'] = page.h1.text
+    if page.p:
         page_s['Description'] = page.p.text
 
     # Get the FAFSA code from the strangely formatted 2nd table of section10.
-    if page_id == 3:
-        div = page.find('div', id='section10')
-        if div:
-            tables = div.find_all('table')
-            if len(tables) == 3:
-                # The FAFSA code is the last six characters of this text.
-                page_s['FAFSA Code'] = tables[2].tbody.th.text[-6:]
+    div = page.find('div', id='section10')
+    if div:
+        tables = div.find_all('table')
+        if len(tables) == 3:
+            # The FAFSA code is the last six characters of this text.
+            page_s['FAFSA Code'] = tables[2].tbody.th.text[-6:]
 
     # Get lists of majors / programs of study from strangely formatted tables.
-    if page_id == 4:
-        caption_strings = ['Undergraduate Majors',
-                           "Master's Programs of Study",
-                           'Doctoral Programs of Study']
-        for caption_string in caption_strings:
-            regex = re.compile(caption_string)
-            caption = page.find('caption', string=regex)
-            if caption:
-                th = caption.find_next('th')
-                td = caption.find_next('td')
-                th_string = "---".join(th.stripped_strings)
-                td_string = "---".join(td.stripped_strings)
-                vals = th_string.split('---')
-                vals += td_string.split('---')
-                page_s[caption_string] = vals
+    caption_strings = ['Undergraduate Majors',
+                       "Master's Programs of Study",
+                       'Doctoral Programs of Study']
+    for caption_string in caption_strings:
+        regex = re.compile(caption_string)
+        caption = page.find('caption', string=regex)
+        if caption:
+            vals = []
+            for tag_name in ['th','td']:
+                tag = caption.find_next(tag_name)
+                if tag:
+                    tag_string = "---".join(tag.stripped_strings)
+                    vals += tag_string.split('---')
+            page_s[caption_string] = vals
             
+    # Get values from tables with no label (but do have captions!).
+    captions = ['Entrance Difficulty',
+               "Master's Degrees Offered",
+               "Doctoral Degrees Offered"]
+    for caption in captions:
+        regex = re.compile(caption)
+        caption_tag = page.find('caption', string = regex)
+        if caption_tag:
+            val = caption_tag.parent.tbody.th.get_text(' ', strip = True)
+            page_s[caption] = val
+    
     return page_s
 
 
@@ -280,7 +307,10 @@ def drop_duplicates(s):
     first_dups = s[first_dups_mask].sort_index()
     last_dups = s[last_dups_mask].sort_index()
     
-    assert all(first_dups == last_dups), "Some dup labels have diff vals."
+    diff_dups = (first_dups != last_dups)
+    
+    msg = f"Some dup labels have diff vals.\n{diff_dups}"
+    assert sum(diff_dups) == 0, msg
     
     s = s[~last_dups_mask] # drop last dups, keep first.
     
@@ -288,30 +318,41 @@ def drop_duplicates(s):
 
 
 def main():
-
+    
+    schools = []
+    exceptions = []
+    
     for school_id in SCHOOL_IDS:
 
         # Hold scraped data for all six pages in pandas Series object.
-        school_s = pd.Series(name = school_id)
+        school_s = pd.Series()
 
-        for page_id in PAGE_IDS:
+        try:
+            for page_id in PAGE_IDS:
 
-            # Request and convert page into BeautifulSoup object.
-            page = get_collegedata_page(school_id, page_id)
+                # Request and convert page into BeautifulSoup object.
+                page = get_collegedata_page(school_id, page_id)
 
-            # Relabel some tag strings to prevent data loss to duplications.
-            page = relabel(page)
+                # Relabel some HTML tag strings to prevent data loss to dups.
+                page = relabel(page)
 
-            # Extract data from page into a pandas Series object.
-            page_s = extract(page)
+                # Extract data from page into a pandas Series object.
+                page_s = extract(page)
 
-            # Append extracted page Series to total school Series.
-            school_s.append(page_s)
+                if not page_s.empty:
+                    # Append extracted page Series to total school Series.
+                    school_s = school_s.append(page_s)
+                else:
+                    break
+                    
+        except Exception:
+            exceptions.append([school_id, Exception])
+        else:
+            # Drop duplicate entries if values are also duplicated.
+            school_s = drop_duplicates(school_s)
+            school_s.name = school_id
+            schools.append(school_s)
+        finally:
+            clear_output(wait = True)
 
-        # Drop duplicate entries if values are also duplicated.
-        school_s = drop_duplicates(school_s)
-        
-    return school_s
-
-
-
+    return schools, exceptions
