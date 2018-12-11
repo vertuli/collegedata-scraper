@@ -1,5 +1,11 @@
 import re
 
+def strip_tag_contents(soup):
+    # Strip all HTML from <th>, <td>, and <caption> tags, leaving only text.
+    for tag in soup.find_all(['th', 'td', 'caption']):
+        tag.string = tag.get_text(' ', strip = True)
+    return soup
+
 def add_sub_labels(soup):
     # Prepend parent labels to the <th> row label tags having class = 'sub'.
     for tag in soup.find_all('th', class_ = 'sub'):

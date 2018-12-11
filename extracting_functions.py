@@ -1,11 +1,11 @@
 import pandas as pd
 import re
 import bs4
-import json
+from scrapecollegedata import config
 
 # Get config values.
-with open('config.json', 'r') as f:
-    config = json.load(f)
+#with open('config.json', 'r') as f:
+#    config = json.load(f)
 
 def extract_tables(soup):
     s = pd.Series()
