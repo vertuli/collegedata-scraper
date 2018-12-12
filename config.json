@@ -6,7 +6,7 @@
   "HEADERS": {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/12.0 Safari/605.1.15"
     },
-  "NA_VALS": ["Not reported", "Not Reported"],
+  "NA_VALS": ["Not reported", "Not Reported", "None"],
   "EMPTY_H1": "Retrieve a Saved Search",
   "PATHS": {
     "CSV": "collegedata.csv",
@@ -16,5 +16,26 @@
   "SCHOOL_ID": {
     "START": 1,
     "END": 5000
-  }
+  },
+  "LIST_VAL_LABELS": [
+    "Payment Plans",
+    "Federal Loans",
+    "Need-Based Available",
+    "Academic Interest/Achievement Award Areas",
+    "Creative Arts/Performance Award Areas",
+    "Special Achievements/Activities Award Areas",
+    "Special Characteristics Award Areas",
+    "Work-Study Programs",
+    "Most Popular Disciplines",
+    "Combined Liberal Arts/ Professional Degree Programs",
+    "Special Programs",
+    "Services for Physically Disabled Students",
+    "Master's Degrees Offered",
+    "Types of Housing",
+    "Intramural Sports",
+    "Activities and Organizations",
+    "ROTC","Doctoral Degrees Offered",
+    "Men's Club Sports",
+    "Women's Club Sports"
+    ]
 }
