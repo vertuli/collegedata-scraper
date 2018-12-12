@@ -8,8 +8,8 @@ def clean(soup, page_id):
     """Apply general cleaning functions to the soup object, then specific
     cleaning functions depending on page_id.
     """
-    # Clean <caption> and <th> tag strings.
-    tags = soup.find_all(['caption', 'th'])
+    # Clean <caption> strings.
+    tags = soup.find_all('caption')
     for tag in tags:
         tag.string = tag.get_text(' ', strip = True)
 
@@ -24,21 +24,9 @@ def clean(soup, page_id):
         else:
             tag.string = tag.get_text('---', strip = True)
 
-    # Prefix parent labels to the <th> row label tags having class = 'sub'.
-    for tag in soup.find_all('th'):
-        prefix = None 
-        if tag.get('class') == 'sub':
-            prefix = tag.find_previous('th', class_ = None).string
-        elif tag.string == 'Women':
-            prefix = tag.parent.find_previous('tr').th.string
-        elif tag.string == 'Men':
-            prefix = tag.parent.find_previous('tr').find_previous('tr').th.string
-        if prefix:
-            tag.string = prefix + ', ' + tag.string
-
     # Restructures anomalous tables that are using their <caption> string as 
     # a 'label' and storing actual data in both <th> and <td> tags.
-    bad_table_caption_strings = [
+    bad_table_captions = [
         'Undergraduate Majors',
         "Master's Programs of Study",
         'Doctoral Programs of Study',
@@ -46,18 +34,44 @@ def clean(soup, page_id):
         'Doctoral Degrees Offered',
         'Entrance Difficulty'
     ]
-    caption_tag = soup.find_all('caption')
-    if caption_tag in bad_table_caption_strings:
+    caption_tags = [tag for tag in soup.find_all('caption') 
+                    if tag.string in bad_table_captions]
+    for caption_tag in caption_tags:
         tbody_tag = caption_tag.find_next('tbody')
         tbody_string = '---'.join(tbody_tag.stripped_strings)
         tbody_tag.clear()
         tbody_tag = insert_row(
-            soup, 
             parent_tag = tbody_tag,
-            label = caption,
-            vals = tbody_string
+            label = caption_tag.string,
+            val = tbody_string
         )
 
+    # Clean <th> strings.
+    for tag in soup.find_all('th'):
+        tag.string = tag.get_text(' ', strip = True)
+        # Prefix parents to the <th> row label tags with class = 'sub'.
+        prefix = None 
+        if tag.get('class') == ['sub']:
+            prefix = tag.find_previous('th', class_ = None).string
+            tag.string = prefix + ', ' + tag.string
+
+    # Fix duplicate gender breakdown labels that occur under these labels:
+    labels = [
+    'Undergraduate Students',
+    'Overall Admission Rate', 
+    'Students Enrolled',
+    'All Undergraduates'
+    ]
+    th_tags = [tag for tag in soup.find_all('th') if tag.string in labels]
+    for th_tag in th_tags:
+        first_th_tag = th_tag.find_next('th')
+        if first_th_tag.string == 'Women':
+            first_th_tag.string = th_tag.string + ', Women'
+            second_th_tag = first_th_tag.find_next('th')
+            if second_th_tag.string == 'Men':
+                second_th_tag.string = th_tag.string + ', Men'
+
+    # More specific cleaning:
     if page_id == 1:
         soup = clean_page1(soup)
     if page_id == 2:
@@ -103,8 +117,15 @@ def clean_page1(soup):
     if p:
         tbody_tag = insert_row(tbody_tag, label = 'Description', val = p.text)
 
+    # Delete shortened 'Selection of Students' table - full version on page 2.
+    caption = 'Selection of Students'
+    caption_tag = soup.find('caption', string = caption)
+    if caption_tag:
+        table_tag = caption_tag.find_parent('table')
+        table_tag.decompose()
+
     # Delete the useless row containing the map widget.
-    th_tag = soup.find('th', string = 'View Larger Map')
+    th_tag = soup.find('th', string = re.compile('View Larger Map'))
     if th_tag:
         tr_tag = th_tag.find_parent('tr')
         tr_tag.decompose()
@@ -113,7 +134,7 @@ def clean_page1(soup):
     regex = re.compile('Population')
     th_tag = soup.find('th', string = regex)
     if th_tag:
-        th_tag.string = "City Population"
+        th_tag.string = 'City Population'
 
     # Rename the GPA tag to line up with an identical value on another page.
     th_tag = soup.find('th', string = 'Average GPA')
@@ -130,16 +151,23 @@ def clean_page2(soup):
     if th_tag:
         th_tag.string = 'Entrance Difficulty, Description'
 
+    # Add missing column label to first column of 'Examinations' table.
+    caption = 'Examinations'
+    caption_tag = soup.find('caption', string = caption)
+    if caption_tag:
+        thead_tag = caption_tag.find_next('thead')
+        thead_tag.td.string = 'Requirement'
+
     # Prepend labels to GPA row labels.
     regex = re.compile('Grade Point Average')
-    caption = soup.find('caption', string = regex)
-    if caption:
-        gpa_table = caption.parent
+    caption_tag = soup.find('caption', string = regex)
+    if caption_tag:
+        gpa_table = caption_tag.parent
         header_tag = gpa_table.tbody.th
         header_tag.string = 'GPA, Average'
         sub_tags = gpa_table.find_all('th')[1:]
         for tag in sub_tags:
-            tag.string = header_tag.string + ', ' + tag.string
+            tag.string = 'GPA, ' + tag.string
 
     # Prepend labels to 'Other Application Requirements' table.
     caption = 'Other Application Requirements'
@@ -148,7 +176,7 @@ def clean_page2(soup):
         th_tags = caption_tag.parent.find_all('th')
         for tag in th_tags:
             text = tag.get_text(' ', strip = True)
-            tag.string = 'Application Requirement, ' + text
+            tag.string = 'Application Requirements, ' + text
 
     return soup
 
@@ -162,7 +190,7 @@ def clean_page3(soup):
         email_tag.string = 'Financial Aid Office, E-mail'
         website_tag = caption.find_next('th', string = 'Web Site')
         website_tag.string = 'Financial Aid Office, Web Site'
-    
+
     # Restructure the strange Forms Required / Cost to File table.
     th_tag = soup.find('th', string = "Forms Required")
     if th_tag:
@@ -190,7 +218,14 @@ def clean_page3(soup):
 
 def clean_page4(soup):
     """Additional cleaning for page 4"""
-    # No additional cleaning needed.
+    # Add prefixes to Curriculum Requirements.
+    div_tag = soup.find('div', id = 'section14')
+    if div_tag:
+        table_tag = div_tag.find('table')
+        if table_tag:
+            th_tags = table_tag.find_all('th')
+            for th_tag in th_tags:
+                th_tag.string = 'Curriculum Requirements, ' + th_tag.string
     return soup
 
 
@@ -208,22 +243,22 @@ def clean_page5(soup):
     if caption_tag:
         thead_tag = caption_tag.find_next('thead')
         if thead_tag:
+            # Clear <thead> and add to it a new <tr> tag, with labeled <th>.
             thead_tag.clear()
-            # Clear <thead> and add new <th> tag with caption as string.
+            tr_tag = soup.new_tag('tr')
+            thead_tag.insert(0, tr_tag)
             th_tag = soup.new_tag('th')
             th_tag.string = caption
-            thead_tag.insert(0, th_tag)
-            # Add new <td> tags holding column labels as strings to <thead>.
+            tr_tag.insert(0, th_tag)
+            # Add new <td> tags holding column labels as strings to <tr>.
             col_labels = [
                 'Women', 'Women, Scholarships Given', 
                 'Men', 'Men, Scholarships Given'
             ]
-            col_labels = [caption + ', ' + col_label 
-                         for col_label in col_labels]
             for i, col_label in enumerate(col_labels):
                 td_tag = soup.new_tag('td')
                 td_tag.string = col_label
-                thead_tag.insert(i + 1, td_tag)
+                tr_tag.insert(i + 1, td_tag)
 
     return soup
 
