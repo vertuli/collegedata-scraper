@@ -138,7 +138,6 @@ def main():
     try:
         for school_id in range(start_school_id, end_school_id + 1):
             try:
-                print(f'Extracting school {school_id}, page {page_id}.')
                 s = get_school(school_id)
             except (IOError, KeyError):
                 msg = f'Failed while processing school {school_id}.'
