@@ -32,25 +32,69 @@ logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
 def scrape(start=None, end=None, silent=False):
-    """Returns a pandas DataFrame (or Series) of school information extracted
-    from the website CollegeData.com.
+    """Returns a pandas DataFrame of school information extracted from the
+    website CollegeData.com, with each row corresponding to a successfully
+    scraped schoolId in the range [start, stop], inclusive, with each column
+    corresponding to labeled information fields on the website.
 
-    CAUTION: Without any start or end parameters provided, scrape will use the
-    default parameters provided in config.json, which could take hours:
-
-    'scrape' will return a pandas DataFrame object, with each row
-    corresponding to a successfully scraped schoolId in the range
-    [start, end], inclusive, and column labels corresponding to labeled fields
-    on the website.
-
-    If only a single 'start' parameter is provided, scrape will instead return
-    a pandas Series object with index labels corresponding to labeled fields
-    on the website, each paired with the appropriate extracted value.
-
-    Setting silent parameter to True will suppress success/fail notifications
-    that print for each schoolId as well as any error messages.
+    Notes
+    -----
+    CAUTION: Without any start or end parameters provided, will use the
+    default parameters provided in config.json, which could scrape thousands
+    of schoolIds and take hours.
 
     'scrape' logs errors to a file located at a path defined in config.json.
+
+    Parameters
+    ----------
+    start : integer
+        schoolId from where to begin scraping CollegeData.com. If none
+        provided, defaults to the value defined in config.json. If start is
+        provided but end is not, will scrape only the start schoolId.
+    end : integer
+        schoolId to end the scraping, inclusive. If both start and end are
+        not provided, end defaults to value defined in config.json.
+    silent: boolean, default False
+        Suppress success/failure notifications that print for each schoolId,
+        as well as any other error messages.
+
+    Returns
+    -------
+    df : DataFrame
+
+    Examples
+    --------
+    Getting a DataFrame of college data from a single schoolId.
+
+    >>> df = collegedatascraper.scrape(59)
+    Successfully scraped school 59.
+    >>> df.info()
+    Successfully scraped school 59.
+    <class 'pandas.core.frame.DataFrame'>
+    Int64Index: 1 entries, 59 to 59
+    Columns: 290 entries, 2016 Graduates Who Took Out Loans to Work-Study ...
+    dtypes: float64(67), object(223)
+    memory usage: 2.3+ KB
+
+    Getting a DataFrame of college data from a range of schoolIds.
+
+    >>> df = collegedatascraper.scrape(1, 10)
+    No info exists on CollegeData.com for schoolId 1.
+    No info exists on CollegeData.com for schoolId 2.
+    No info exists on CollegeData.com for schoolId 3.
+    No info exists on CollegeData.com for schoolId 4.
+    No info exists on CollegeData.com for schoolId 5.
+    Successfully scraped schoolId 6.
+    Successfully scraped schoolId 7.
+    Successfully scraped schoolId 8.
+    Successfully scraped schoolId 9.
+    Successfully scraped schoolId 10.
+    >>> df.info()
+    <class 'pandas.core.frame.DataFrame'>
+    Int64Index: 5 entries, 6 to 10
+    Columns: 293 entries, 2016 Graduates Who Took Out Loans to Work-Study ...
+    dtypes: float64(41), object(252)
+    memory usage: 11.5+ KB
     """
 
     start_id, end_id = get_range(start, end)
@@ -72,9 +116,29 @@ def scrape(start=None, end=None, silent=False):
     else:
         msg = 'Successfully finished!'
     finally:
-        output = build_output(s_list)
+        if s_list:
+            # Create pandas DataFrame from list of Series, and name the index.
+            df = pd.DataFrame(s_list)
+            df.index = df.index.rename('School ID')
 
-    return output
+            # Reorder the DataFrame columns alphabetically.
+            df = df.reindex(columns=sorted(df.columns))
+
+            # FUTURE FEATURE
+            ##################################################################
+            # This is where it might be best to start 'cleaning' the DataFrame
+            # with functions in a new 'cleaners.py' module to, for example,
+            # split strings containing multiple numeric values into separate
+            # columns of the appropriate type.
+            #
+            # Much of this has already been done in a 'cleaning' Jupyter
+            # notebook in the related college-yield-gap analysis repository:
+            # - https://github.com/vertuli/college-yield-gap/
+
+        else:
+            df = None
+
+    return df
 
 
 def scrape_school(school_id, silent=False):
@@ -111,14 +175,17 @@ def scrape_school(school_id, silent=False):
 
     except IOError:
         s = None
-        msg = f'Failed while processing school {school_id}.'
+        msg = f'Got anomalous response while requesting schoolId {school_id}.'
         logging.warning(msg)
+    except LookupError:
+        s = None
+        msg = f'No info exists on CollegeData.com for schoolId {school_id}.'
     except Exception as e:
         s = None
-        msg = f'Exception encountered while getting school {school_id}!\n{e}'
+        msg = f'Exception while requesting schoolId {school_id}!\n{e}'
         logging.critical(msg, exc_info=True)
     else:
-        msg = f'Successfully scraped school {school_id}.'
+        msg = f'Successfully scraped schoolId {school_id}.'
     finally:
         if not silent:
             print(msg)
@@ -160,34 +227,6 @@ def get_range(start_input, end_input):
     return start_id, end_id
 
 
-def build_output(s_list):
-    """Construct appropriate output from list of pandas Series."""
-
-    if s_list:
-        df = pd.DataFrame(s_list)
-        df.index = df.index.rename('School ID')
-
-        # FUTURE FEATURE
-        ######################################################################
-        # This is where it might be best to start 'cleaning' the DataFrame
-        # with functions in a new 'cleaners.py' module to, for example,
-        # split strings containing multiple numeric values into separate
-        # columns of the appropriate type.
-        #
-        # Much of this has already been done in a 'cleaning' Jupyter notebook
-        # in the related college-yield-gap analysis repository:
-        #     https://github.com/vertuli/college-yield-gap/
-
-        if len(df) > 1:
-            output = df  # Output a DataFrame.
-        if len(df) == 1:
-            output = df.iloc[0]  # Output a Series.
-    else:
-        output = None
-
-    return output
-
-
 def get_soup(school_id, page_id):
     """Requests a page from CollegeData.com corresponding to the provided
     school_id and page_id and converts the response to a BeautifulSoup object
@@ -222,7 +261,7 @@ def get_soup(school_id, page_id):
     if soup.h1.string == empty_h1_string:
         msg = 'School ID ' + str(school_id) + ' has no info.'
         logging.info(msg)
-        raise IOError
+        raise LookupError
 
     return soup
 
