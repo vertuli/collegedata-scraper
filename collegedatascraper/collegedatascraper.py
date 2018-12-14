@@ -166,6 +166,18 @@ def build_output(s_list):
     if s_list:
         df = pd.DataFrame(s_list)
         df.index = df.index.rename('School ID')
+
+        # FUTURE FEATURE
+        ######################################################################
+        # This is where it might be best to start 'cleaning' the DataFrame
+        # with functions in a new 'cleaners.py' module to, for example,
+        # split strings containing multiple numeric values into separate
+        # columns of the appropriate type.
+        #
+        # Much of this has already been done in a 'cleaning' Jupyter notebook
+        # in the related college-yield-gap analysis repository:
+        #     https://github.com/vertuli/college-yield-gap/
+
         if len(df) > 1:
             output = df  # Output a DataFrame.
         if len(df) == 1:
