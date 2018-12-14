@@ -1,164 +1,151 @@
 import json
 import sys
 import logging
-import requests
-import bs4
 import pandas as pd
 
 import collegedatascraper.reformatters
+import collegedatascraper.extractors
+
 
 # Get config values.
 with open('config.json', 'r') as f:
     config = json.load(f)
 
 # Setup logging.
-path = config['PATHS']['ERROR_LOG']
-logging.basicConfig(filename=path, filemode='w', level=logging.DEBUG)
+log_path = config['PATHS']['ERROR_LOG']
+logging.basicConfig(filename=log_path, filemode='w', level=logging.DEBUG)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
-def get_soup(url):
-    """Request url and convert response to strained BeautifulSoup object."""
-    # Request the url and raise an exception if something strange returned.
-    response = requests.get(url, headers=config['HEADERS'])
-    if response.status_code != 200:
-        msg = url + ' gave status code ' + response.status_code
-        logging.warning(msg)
-        raise IOError
-    # Limit parsing to only <h1> tags or the tag <div id='tabcontwrap'>.
-    strainer = bs4.SoupStrainer(
-        lambda name, attrs: name == 'h1' or attrs.get('id') == 'tabcontwrap'
-    )
-    # Parse response text into a BeautifulSoup object.
-    soup = bs4.BeautifulSoup(
-        markup=response.text, features="lxml", parse_only=strainer
-    )
-    return soup
-
-
-def get_school(school_id):
+def get_single_school(school_id, silent=False):
     """Get six pages of data associated with a CollegeData.com school_id and
     return a pandas Series object holding extracted values.
     """
-    school_series = pd.Series(name=school_id)
+    try:
+        # Get DataFrames for the <table> on all six pages for the school_id.
+        df_list = []
+        for page_id in range(1, 7):
+            df_list += collegedatascraper.extractors.get_df_list(
+                school_id,
+                page_id
+            )
 
-    for page_id in range(1, 7):
-        # Request and convert page to soup object.
-        url = config['URL']['PART1'] + str(page_id) \
-                + config['URL']['PART2'] + str(school_id)
-        soup = get_soup(url)
-        # Raise an error if the <h1> tag contained the empty page string.
-        if soup.h1.string == config['EMPTY_H1']:
-            msg = 'School ID ' + str(school_id) + ' has no info.'
+        # Separate dataframes with single <td> from those with multiple <td>.
+        singlecol_df_list = []
+        table_df_list = []
+        for df in df_list:
+            if len(df.columns) == 1:
+                singlecol_df_list.append(df)
+            if len(df.columns) > 1:
+                table_df_list.append(df)
+
+        # Extract a Series from the single col DataFrames.
+        singlecol_df = pd.concat(singlecol_df_list, axis=0, sort=False)
+        singlecol_s = singlecol_df.iloc[:, 0]
+
+        # Extract a Series from the table DataFrames.
+        tables_s = collegedatascraper.extractors.df_to_series(table_df_list)
+
+        # Merge both Series into one, and sort the index.
+        merged_s = pd.concat([singlecol_s, tables_s])
+        merged_s.sort_index(inplace=True)
+
+        # Drop duplicate indices and their vals and name the Series.
+        s = merged_s[~merged_s.index.duplicated()]
+        s.name = school_id
+
+    except IOError:
+        s = None
+        msg = f'Failed while processing school {school_id}.'
+        logging.warning(msg)
+    except Exception as e:
+        s = None
+        msg = f'Exception encountered while getting school {school_id}!\n{e}'
+        logging.critical(msg, exc_info=True)
+    else:
+        msg = f'Successfully scraped school {school_id}.'
+    finally:
+        if not silent:
             print(msg)
-            logging.info(msg)
-            raise IOError
-
-        # Cleaning soup and extract values as series.
-        soup = collegedatascraper.reformatters.reformat(soup, page_id)
-
-        # Extract data and append to school Series.
-        s = extract(soup)
-        school_series = school_series.append(s)
-
-    school_series = school_series.sort_index()
-
-    # Drop duplicate indices and their values.
-    school_series = school_series[~school_series.index.duplicated()]
-
-    school_series.name = school_id
-
-    return school_series
-
-
-def extract(soup):
-    """Extract vals from <table> in BeautifulSoup and return pandas Series."""
-    s = pd.Series()
-
-    # Convert <table> to pandas DataFrames.
-    df_list = pd.read_html(
-        soup.decode(), na_values=config['NA_VALS'], index_col=0
-    )
-
-    # Separate <table> with single <td> from those with multiple <td>.
-    table_dfs = []
-    for df in df_list:
-        # Extract values from <table> with only one <td> row as labeled Series.
-        if len(df.columns) == 1:
-            s = s.append(df.iloc[:, 0])
-        # Make list of <table> with multiple columns of <td>.
-        if len(df.columns) > 1:
-            df = df.loc[df.index.dropna()]  # Drop NaN in index.
-            table_dfs.append(df)
-
-    # Extract values from <table> with more than one <td> column.
-    for i in range(len(table_dfs)):
-        table_s = pd.Series()
-        df = table_dfs[i]
-        # The 'Subject' and 'Exam' tables are similar.
-        if df.index.name in ['Subject', 'Exam']:
-            for col in df.columns:
-                col_s = df[col]
-                col_s.index = df.index.name + ', ' + col_s.index + ', ' + col
-                table_s = table_s.append(col_s)
-        # The 'Factor' and 'Sports' tables are similar, if you transpose one.
-        if df.index.name in ['Factor', 'Intercollegiate Sports Offered']:
-            if df.index.name == 'Factor':
-                df = df.T  # Rotate this table and extract cols as vals.
-                df.index.name = 'Factor'
-            for col in df.columns:
-                label = df.index.name + ', ' + col
-                vals = df[col].dropna().index.tolist()
-                if vals:
-                    if df.index.name == 'Intercollegiate Sports Offered':
-                        table_s[label] = tuple(vals)  # Has many vals.
-                    elif df.index.name == 'Factor':
-                        table_s[label] = vals[0]  # Has only one val.
-        s = s.append(table_s)
     return s
 
 
-def main():
-    # Get start and stop school IDs from user or defaults from config file.
-    try:
-        if len(sys.argv) > 1:
-            start_school_id = int(sys.argv[1])
-        else:
-            start_school_id = config['SCHOOL_ID']['START']
-        if len(sys.argv) > 2:
-            end_school_id = int(sys.argv[2])
-        else:
-            end_school_id = config['SCHOOL_ID']['END']
-    except ValueError:
-        print('School IDs must be integers.')
-        raise
+def get_school(start_id, end_id=None, silent=False):
+    """Runs get_school for every school_id in range from start_id to end_id,
+    returning a pandas DataFrame. Default range is from 1 to 5000."""
+    if not end_id:
+        end_id = start_id
 
-    # Get data for each school and export to .csv file, in chunks.
-    s_list = []
+    all_s_list = []
     try:
-        for school_id in range(start_school_id, end_school_id + 1):
-            try:
-                s = get_school(school_id)
-            except (IOError, KeyError):
-                msg = f'Failed while processing school {school_id}.'
-                logging.warning(msg)
-                print(msg)
-            else:
-                print(f'Successfully scraped school {school_id}.')
-                s_list.append(s)
+        for school_id in range(start_id, end_id + 1):
+            s = get_single_school(school_id, silent=silent)
+            all_s_list.append(s)
+
+        # Remove None values from the Series list, if any.
+        s_list = [s for s in all_s_list if s is not None]
+
     except KeyboardInterrupt:
-        print('Stopping...')
+        msg = 'Stopped!'
     except Exception as e:
-        msg = f'CRITICAL: Exception encountered.\n{e}'
+        msg = f'Exception occured after getting school(s)!\n{e}'
         logging.critical(msg, exc_info=True)
     else:
-        print('Successfully finished.')
+        msg = 'Successfully finished!'
     finally:
-        # Write DataFrame df to CSV located at path.
+        output = build_output(s_list)
+    return output
+
+
+def build_output(s_list):
+    """Construct appropriate output from list of pandas Series."""
+    if s_list:
         df = pd.DataFrame(s_list)
         df.index = df.index.rename('School ID')
-        path = config['PATHS']['CSV']
-        df.to_csv(path, index_label='School ID')
+        if len(df) > 1:
+            output = df  # Output a DataFrame.
+        if len(df) == 1:
+            output = df.iloc[0]  # Output a Series.
+    else:
+        output = None
+
+    return output
+
+
+def get_input(args):
+    """Get start and end school IDs from user, or else from config file."""
+    try:
+        if len(args) > 1 and args[1] > 1:
+            start_id = int(args[1])
+            if len(args) > 2 and args[2] > start_id:
+                end_id = int(args[2])
+        else:
+            start_id = config['SCHOOL_ID']['START']
+            end_id = config['SCHOOL_ID']['END']
+    except ValueError:
+        msg = 'Range start and end must be positive integers.'
+        logging.warning(msg, exc_info=True)
+        raise
+
+    return start_id, end_id
+
+
+def main():
+    """This function executes if module is run as a script."""
+    start_id, end_id = get_input(sys.argv)
+
+    csv_path = config['PATHS']['CSV']
+    silent = config['SILENT']
+
+    # Get data for each school and export to .csv file.
+    df = get_school(start_id, end_id, silent=False)
+    if df and not df.empty:
+        df.to_csv(csv_path, index_label='School ID')
+        msg = f'Scraped {len(df)} schools to {csv_path}.'
+    else:
+        msg = f'No schools scraped.'
+    if not silent:
+        print(msg)
 
 
 if __name__ == '__main__':

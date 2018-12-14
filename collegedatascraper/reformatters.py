@@ -7,9 +7,40 @@ import re
 
 
 def reformat(soup, page_id):
-    """Apply general reformatting functions to the soup object, then specific
-    reformatting functions depending on page_id.
+    """First, do general reformatting, then send the soup to the
+    appropriate page-specific reformatter.
     """
+
+    generally_reformatted_soup = general_reformat(soup)
+
+    switcher = {
+        1: reformat_page1,
+        2: reformat_page2,
+        3: reformat_page3,
+        4: reformat_page4,
+        5: reformat_page5,
+        6: reformat_page6
+    }
+
+    func = switcher.get(page_id)
+    specifically_reformatted_soup = func(generally_reformatted_soup)
+
+    return specifically_reformatted_soup
+
+
+def general_reformat(soup):
+    """Apply general reformatting functions to the soup."""
+
+    soup_1 = reformat_tag_strings(soup)
+    soup_2 = reformat_labelless_tables(soup_1)
+    soup_3 = reformat_gender_labels(soup_2)
+
+    return soup_3
+
+
+def reformat_tag_strings(soup):
+    """Strip extraneous HTML from <caption>, <td>, and <th> tag strings."""
+
     # Strip <caption> strings.
     tags = soup.find_all('caption')
     for tag in tags:
@@ -26,8 +57,22 @@ def reformat(soup, page_id):
         else:
             tag.string = tag.get_text('---', strip=True)
 
-    # Reformats anomalous tables that are using their <caption> string as
-    # a 'label' and storing actual data in both <th> and <td> tags.
+    # Reformat <th> strings.
+    for tag in soup.find_all('th'):
+        tag.string = tag.get_text(' ', strip=True)
+        # Prefix parents to the <th> row label tags with class = 'sub'.
+        prefix = None
+        if tag.get('class') == ['sub']:
+            prefix = tag.find_previous('th', class_=None).string
+            tag.string = prefix + ', ' + tag.string
+
+    return soup
+
+
+def reformat_labelless_tables(soup):
+    """Reformats anomalous tables that are using their <caption> string as
+    a 'label' and storing actual data in both <th> and <td> tags.
+    """
     bad_table_captions = [
         'Undergraduate Majors',
         "Master's Programs of Study",
@@ -48,16 +93,13 @@ def reformat(soup, page_id):
             val=tbody_string
         )
 
-    # Reformat <th> strings.
-    for tag in soup.find_all('th'):
-        tag.string = tag.get_text(' ', strip=True)
-        # Prefix parents to the <th> row label tags with class = 'sub'.
-        prefix = None
-        if tag.get('class') == ['sub']:
-            prefix = tag.find_previous('th', class_=None).string
-            tag.string = prefix + ', ' + tag.string
+    return soup
 
-    # Append to duplicate gender labels that occur under these parent labels:
+
+def reformat_gender_labels(soup):
+    """Appends parent label as prefix to 'Men' and 'Women' labeled rows that
+    occur under these parent labels.
+    """
     labels = [
         'Undergraduate Students',
         'Overall Admission Rate',
@@ -73,21 +115,8 @@ def reformat(soup, page_id):
             if second_th_tag.string == 'Men':
                 second_th_tag.string = th_tag.string + ', Men'
 
-    # More specific reformatting, by page:
-    if page_id == 1:
-        soup = reformat_page1(soup)
-    if page_id == 2:
-        soup = reformat_page2(soup)
-    if page_id == 3:
-        soup = reformat_page3(soup)
-    if page_id == 4:
-        soup = reformat_page4(soup)
-    if page_id == 5:
-        soup = reformat_page5(soup)
-    if page_id == 6:
-        soup = reformat_page6(soup)
-
     return soup
+
 
 ##############################################################################
 # UTILITY FUNCTIONS
@@ -102,7 +131,8 @@ def insert_row(parent_tag, label=None, val=None):
     tr_tag = soup.new_tag('tr')
     tr_tag.insert(0, th_tag)
     td_tag = soup.new_tag('td')
-    td_tag.string = val
+    if val:
+        td_tag.string = val
     tr_tag.insert(1, td_tag)
     parent_tag.insert(0, tr_tag)
     return parent_tag
@@ -113,7 +143,8 @@ def insert_row(parent_tag, label=None, val=None):
 
 
 def reformat_page1(soup):
-    """Additional reformatting for page 1"""
+    """Specific reformatting for page 1"""
+
     # Add school Name, found only in the <h1> string, to the first <tbody>.
     tbody_tag = soup.find('tbody')
     tbody_tag = insert_row(tbody_tag, label='Name', val=soup.h1.text)
@@ -151,7 +182,8 @@ def reformat_page1(soup):
 
 
 def reformat_page2(soup):
-    """Additional reformatting for page 2"""
+    """Specific reformatting for page 2"""
+
     # Rename the duplicate Entrance Difficulty label on the Overview page.
     th_tag = soup.find('th', string='Entrance Difficulty')
     if th_tag:
@@ -188,7 +220,8 @@ def reformat_page2(soup):
 
 
 def reformat_page3(soup):
-    """Additional reformatting for page 3"""
+    """Specific reformatting for page 3"""
+
     # Prepend labels to duplicate E-mail and Web Site labels.
     caption = soup.find('caption', string='Financial Aid Office')
     if caption:
@@ -198,16 +231,18 @@ def reformat_page3(soup):
         website_tag.string = 'Financial Aid Office, Web Site'
 
     # Restructure the strange Forms Required / Cost to File table.
-    th_tag = soup.find('th', string="Forms Required")
-    if th_tag:
-        tbody_tag = th_tag.find_next('tbody')
-        for th in tbody_tag.find_all('th'):
-            if 'FAFSA' in th.text:
-                fafsa_code = th.text[-6:]
-                th.string = 'FAFSA Code'
-                td = th.find_next('td')
-                if td:
-                    td.string = fafsa_code
+    thead_th_tag = soup.find('th', string="Forms Required")
+    if thead_th_tag:
+        table_tag = thead_th_tag.find_parent('table')
+        table_tag.thead.decompose()
+        th_tag = table_tag.find('th', string=re.compile('FAFSA'))
+        if th_tag:
+            fafsa_code = th_tag.text[-6:]
+            th_tag.string = 'FAFSA'
+        else:
+            fafsa_code = None
+        tbody_tag = table_tag.find('tbody')
+        tbody_tag = insert_row(tbody_tag, label='FAFSA Code', val=fafsa_code)
 
     # Prepend labels to financial aid information
     div = soup.find('div', id='section11')
@@ -223,7 +258,8 @@ def reformat_page3(soup):
 
 
 def reformat_page4(soup):
-    """Additional reformatting for page 4"""
+    """Specific reformatting for page 4"""
+
     # Add prefixes to Curriculum Requirements.
     div_tag = soup.find('div', id='section14')
     if div_tag:
@@ -236,7 +272,8 @@ def reformat_page4(soup):
 
 
 def reformat_page5(soup):
-    """Additional reformatting for page 5"""
+    """Specific reformatting for page 5"""
+
     # Fix city Population labels (varying label contains city name).
     regex = re.compile('Population')
     th_tag = soup.find('th', string=regex)
@@ -270,6 +307,6 @@ def reformat_page5(soup):
 
 
 def reformat_page6(soup):
-    """Additional reformatting for page 6"""
+    """Specific reformatting for page 6"""
     # No additional changes needed.
     return soup
