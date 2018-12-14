@@ -1,18 +1,18 @@
 import bs4
 import re
 
-##############################################################################
-# GENERAL REFORMATTING
-##############################################################################
 
-
-def reformat(soup, page_id):
+def reformat_soup(soup, page_id):
     """First, do general reformatting, then send the soup to the
     appropriate page-specific reformatter.
     """
 
-    generally_reformatted_soup = general_reformat(soup)
+    # General reformatting.
+    soup = reformat_tag_strings(soup)
+    soup = reformat_labelless_tables(soup)
+    soup = reformat_gender_labels(soup)
 
+    # Page-specific reformatting.
     switcher = {
         1: reformat_page1,
         2: reformat_page2,
@@ -21,21 +21,14 @@ def reformat(soup, page_id):
         5: reformat_page5,
         6: reformat_page6
     }
-
     func = switcher.get(page_id)
-    specifically_reformatted_soup = func(generally_reformatted_soup)
+    soup = func(soup)
 
-    return specifically_reformatted_soup
+    return soup
 
-
-def general_reformat(soup):
-    """Apply general reformatting functions to the soup."""
-
-    soup_1 = reformat_tag_strings(soup)
-    soup_2 = reformat_labelless_tables(soup_1)
-    soup_3 = reformat_gender_labels(soup_2)
-
-    return soup_3
+##############################################################################
+# GENERAL REFORMATTING FUNCTIONS
+##############################################################################
 
 
 def reformat_tag_strings(soup):
@@ -117,28 +110,8 @@ def reformat_gender_labels(soup):
 
     return soup
 
-
 ##############################################################################
-# UTILITY FUNCTIONS
-##############################################################################
-
-
-def insert_row(parent_tag, label=None, val=None):
-    """Insert <tr> w/<th> for label and a <td> for val into parent_tag."""
-    soup = bs4.BeautifulSoup(markup='', features='lxml')
-    th_tag = soup.new_tag('th')
-    th_tag.string = label
-    tr_tag = soup.new_tag('tr')
-    tr_tag.insert(0, th_tag)
-    td_tag = soup.new_tag('td')
-    if val:
-        td_tag.string = val
-    tr_tag.insert(1, td_tag)
-    parent_tag.insert(0, tr_tag)
-    return parent_tag
-
-##############################################################################
-# REFORMATTING SPECIFIC PAGES
+# PAGE-SPECIFIC REFORMATTING FUNCTIONS
 ##############################################################################
 
 
@@ -310,3 +283,30 @@ def reformat_page6(soup):
     """Specific reformatting for page 6"""
     # No additional changes needed.
     return soup
+
+##############################################################################
+# HELPER FUNCTIONS
+##############################################################################
+
+
+def insert_row(parent_tag, label=None, val=None):
+    """Insert <tr> w/<th> for label and a <td> for val into parent_tag."""
+    soup = bs4.BeautifulSoup(markup='', features='lxml')
+    th_tag = soup.new_tag('th')
+    th_tag.string = label
+    tr_tag = soup.new_tag('tr')
+    tr_tag.insert(0, th_tag)
+    td_tag = soup.new_tag('td')
+    if val:
+        td_tag.string = val
+    tr_tag.insert(1, td_tag)
+    parent_tag.insert(0, tr_tag)
+    return parent_tag
+
+
+def main():
+    """This function executes if module is run as a script."""
+
+
+if __name__ == '__main__':
+    main()

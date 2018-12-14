@@ -1,91 +1,86 @@
-import requests
-import bs4
 import pandas as pd
-import logging
-import collegedatascraper.reformatters
-from collegedatascraper import config
-
-url_pt1 = config['URL']['PART1']
-url_pt2 = config['URL']['PART2']
-headers = config['HEADERS']
-empty_h1_string = config['EMPTY_H1']
-na_vals = config['NA_VALS']
 
 
-def get_soup(school_id, page_id):
-    # Request and convert page to soup object.
-    url = url_pt1 + str(page_id) + url_pt2 + str(school_id)
+def extract_series(df):
+    """Returns a pandas Series of all info extracted from a DataFrame."""
 
-    # Request the url and raise exception if something strange returned.
-    response = requests.get(url, headers=headers)
-    if response.status_code != 200:
-        msg = url + ' gave status code ' + response.status_code
-        logging.warning(msg)
-        raise IOError
-    # Limit parsing to only <h1> tags or the tag <div id='tabcontwrap'>.
-    strainer = bs4.SoupStrainer(
-        lambda name, attrs: name == 'h1'
-        or attrs.get('id') == 'tabcontwrap'
-    )
-    # Parse response text into a BeautifulSoup object.
-    soup = bs4.BeautifulSoup(
-        markup=response.text, features="lxml", parse_only=strainer
-    )
+    # Remove index, value pairs from DataFrame if index is NaN.
+    missing = df.index.isna()
+    missing_idx = df[missing].index
+    df.drop(missing_idx, inplace=True)
 
-    # Raise an error if the <h1> tag contained the empty page string.
-    if soup.h1.string == empty_h1_string:
-        msg = 'School ID ' + str(school_id) + ' has no info.'
-        logging.info(msg)
-        raise IOError
+    # Extract a Series from a single col DataFrame.
+    if len(df.columns) == 1:
+        s = df.iloc[:, 0]
 
-    return soup
+    # Extract a Series from a wide DataFrame with multiple columns.
+    if len(df.columns) > 1:
+        s = wide_df_to_series(df)
+
+    return s
+
+##############################################################################
+# EXTRACTING SERIES FROM WIDE DATAFRAMES FUNCTIONS
+##############################################################################
 
 
-def get_df_list(school_id, page_id):
-    """Get a list of pandas DataFrames representing the <table> contents of
-    the six CollegeData.com pages associated with a school_id."""
+def wide_df_to_series(df):
+    """Create a single pandas Series from a list of pandas DataFrames objects
+    representing CollegeData.com <table> tags holding multiple columns."""
 
-    # Get BeautifulSoup object representing page HTML content.
-    soup = get_soup(school_id, page_id)
+    # There are only four scraped tables from which we want to extract Series.
 
-    # Standardize some of the anomalous labels and tables in the page.
-    reformatted_soup = collegedatascraper.reformatters.reformat(soup, page_id)
+    # These two are both 'traditional' tables with cells having various vals.
+    if df.index.name in ['Subject', 'Exam']:
+        s = multival_wide_df_to_series(df)
 
-    # Get pandas DataFrames from <table> tags and add them to df_list.
-    df_list = pd.read_html(
-        reformatted_soup.decode(),
-        na_values=na_vals,
-        index_col=0
-    )
+    # These two both similarly have cell values that 'mark' a row/col label.
+    elif df.index.name in ['Factor', 'Intercollegiate Sports Offered']:
 
-    # Remove rows with NaN indices from each DataFrame.
-    for i in range(len(df_list)):
-        df_list[i] = df_list[i].loc[df_list[i].index.dropna()]
+        # These can be processed the same way if 'Factor' table is flipped:
+        if df.index.name == 'Factor':
+            df = df.T  # Transpose
+            df.index.name = 'Factor'
 
-    return df_list
+        s = singleval_wide_df_to_series(df)  # Returns a tuple of marked vals.
+
+        # 'Factor' table should only have one val marked, so we'll extract it.
+        if df.index.name == 'Factor':
+            s = s.str[0]
+
+    # There is one other table (on the Overview) which is a shortened copy of
+    # the 'Factor' table, which we can ignore.
+    else:
+        s = None
+
+    return s
 
 
-def multi_val_df_to_series(df):
+def multival_wide_df_to_series(df):
     """Create a pandas Series from a DataFrame with labeled rows and columns
     and differing values in each 'cell'. The returned Series contains up to
     m x n values 'cell' values from the DataFrame, each indexed by its former
     DataFrame row label comma seperated from its column label.
     label"""
+
     s = pd.Series()
+
     for col in df.columns:
-            col_s = df[col]
-            col_s.index = df.index.name + ', ' + col_s.index + ', ' + col
-            s = s.append(col_s)
+        col_s = df[col]
+        col_s.index = df.index.name + ', ' + col_s.index + ', ' + col
+        s = s.append(col_s)
 
     return s
 
 
-def single_val_df_to_series(df):
+def singleval_wide_df_to_series(df):
     """Creates a pandas Series from a DataFrame with labeled rows and columns
     but only a single value (or null) in each 'cell' - with this value serving
     to 'mark' a row. The returned Series contains a tuple of all marked row
     labels indexed by the column names."""
+
     s = pd.Series()
+
     for col in df.columns:
         # Use the col label + the table index name as the final 'label'.
         key = df.index.name + ', ' + col
@@ -96,27 +91,9 @@ def single_val_df_to_series(df):
     return s
 
 
-def df_to_series(df_list):
-    """Create a single pandas Series from a list of pandas DataFrames objects
-    representing CollegeData.com <table> tags holding multiple columns."""
-    s_list = []
-    for df in df_list:
-        # There are only a maximum of four scraped tables we will transform.
-        # Two of them can be processed with the same procedure:
-        if df.index.name in ['Subject', 'Exam']:
-            s = multi_val_df_to_series(df)
-            s_list.append(s)
-        # The other two can be processed together if one is flipped:
-        if df.index.name == 'Factor':
-            df = df.T  # Transpose
-            df.index.name == 'Factor'
-        # Process the remaining two tables:
-        if df.index.name in ['Factor', 'Intercollegiate Sports Offered']:
-            s = single_val_df_to_series(df)
-            if df.index.name == 'Factor':
-                s = s.str[0]  # 'Factor' table cols only mark a single val.
-            s_list.append(s)
+def main():
+    """This function executes if module is run as a script."""
 
-    s = pd.concat(s_list)
 
-    return s
+if __name__ == '__main__':
+    main()

@@ -1,5 +1,5 @@
-__all__ = ["get_school"]
+__all__ = ["scrape"]
 
-from collegedatascraper.collegedatascraper import get_school
+from collegedatascraper.collegedatascraper import scrape
 
 name = 'collegedatascraper'
